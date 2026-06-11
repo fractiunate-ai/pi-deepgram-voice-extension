@@ -3,6 +3,7 @@ import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { transcribeFile } from "./deepgram.js";
 import { startRecording, type RecordingSession } from "./recorder.js";
 import { createTempAudioFile } from "./temp.js";
+import { formatDevice, listAudioInputDevices, loadVoiceSettings, saveVoiceSettings } from "./settings.js";
 
 const STATUS_KEY = "deepgram-voice";
 const WIDGET_KEY = "deepgram-voice";
@@ -101,6 +102,48 @@ export default function (pi: ExtensionAPI) {
     description: "Toggle Deepgram voice input",
     handler: async (ctx) => {
       await runVoice(ctx as VoiceContext);
+    },
+  });
+
+  pi.registerCommand("voicesettings", {
+    description: "Select the microphone input used by Deepgram voice recording",
+    handler: async (args, ctx) => {
+      const action = args.trim().toLowerCase();
+      if (action === "show") {
+        const settings = await loadVoiceSettings();
+        ctx.ui.notify(`Voice microphone: ${formatDevice(settings.device)}`, "info");
+        return;
+      }
+
+      if (action === "reset") {
+        const [defaultDevice] = await listAudioInputDevices();
+        await saveVoiceSettings({ device: defaultDevice });
+        ctx.ui.notify(`Voice microphone reset to ${formatDevice(defaultDevice)}`, "info");
+        return;
+      }
+
+      const settings = await loadVoiceSettings();
+      const devices = await listAudioInputDevices();
+      const labels = devices.map((device) => {
+        const current = device.kind === settings.device.kind && device.id === settings.device.id ? "current — " : "";
+        return `${current}${formatDevice(device)}`;
+      });
+
+      const choice = await ctx.ui.select("Select microphone input for /voice", labels);
+      if (!choice) {
+        ctx.ui.notify("Voice microphone selection cancelled", "info");
+        return;
+      }
+
+      const index = labels.indexOf(choice);
+      const device = devices[index];
+      if (!device) {
+        ctx.ui.notify("Could not resolve selected microphone", "error");
+        return;
+      }
+
+      await saveVoiceSettings({ device });
+      ctx.ui.notify(`Voice microphone set to ${formatDevice(device)}`, "info");
     },
   });
 

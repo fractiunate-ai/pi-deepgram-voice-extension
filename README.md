@@ -7,6 +7,7 @@ This project intentionally does **not** use `yukukotani/pi-voice`, does **not** 
 ## What it does
 
 - Registers `/voice`
+- Registers `/voicesettings` to choose the microphone input
 - Registers `alt+j`
 - Shows a Pi TUI status/widget while recording
 - Records microphone audio to a temporary WAV file using SoX/`rec`
@@ -39,7 +40,7 @@ Install SoX so the `rec` command is available:
 brew install sox
 
 # Debian/Ubuntu/WSL
-sudo apt-get update && sudo apt-get install -y sox libsox-fmt-all
+sudo apt-get update && sudo apt-get install -y sox libsox-fmt-all pulseaudio-utils alsa-utils
 
 # Windows native
 winget install ChrisBagwell.SoX
@@ -110,6 +111,19 @@ Inside the Pi TUI:
 /voice
 ```
 
+Select microphone input:
+
+```text
+/voicesettings
+```
+
+Show/reset microphone settings:
+
+```text
+/voicesettings show
+/voicesettings reset
+```
+
 or press:
 
 ```text
@@ -118,10 +132,11 @@ alt+j
 
 ## Usage
 
-1. Trigger `/voice` or `alt+j`.
-2. Speak while the widget says recording is active.
-3. Press `Enter`, `Escape`, or `alt+j` again to stop.
-4. The extension transcribes with Deepgram and sends the transcript into Pi as a user message.
+1. Optional: run `/voicesettings` to select your microphone input.
+2. Trigger `/voice` or `alt+j`.
+3. Speak while the widget says recording is active.
+4. Press `Enter`, `Escape`, or `alt+j` again to stop.
+5. The extension transcribes with Deepgram and sends the transcript into Pi as a user message.
 
 ## Limitation
 

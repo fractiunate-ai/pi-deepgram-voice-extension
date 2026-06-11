@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { formatDevice, loadVoiceSettings, type AudioInputDevice } from "./settings.js";
 
 export class RecorderError extends Error {
   constructor(message: string, public readonly cause?: unknown) {
@@ -38,12 +39,36 @@ async function commandExists(command: string): Promise<boolean> {
   });
 }
 
-async function resolveRecorder(audioPath: string): Promise<RecorderCommand> {
+async function resolveRecorder(audioPath: string, device: AudioInputDevice): Promise<RecorderCommand> {
+  const installHint = soxInstallHint();
+
+  if (device.kind === "pulse") {
+    if (await commandExists("sox")) {
+      return {
+        command: "sox",
+        args: ["-q", "-t", "pulseaudio", device.id, "-r", "16000", "-c", "1", "-b", "16", "-e", "signed-integer", audioPath],
+        installHint,
+      };
+    }
+    throw new RecorderError(installHint);
+  }
+
+  if (device.kind === "alsa") {
+    if (await commandExists("sox")) {
+      return {
+        command: "sox",
+        args: ["-q", "-t", "alsa", device.id, "-r", "16000", "-c", "1", "-b", "16", "-e", "signed-integer", audioPath],
+        installHint,
+      };
+    }
+    throw new RecorderError(installHint);
+  }
+
   if (await commandExists("rec")) {
     return {
       command: "rec",
       args: ["-q", "-r", "16000", "-c", "1", "-b", "16", "-e", "signed-integer", audioPath],
-      installHint: soxInstallHint(),
+      installHint,
     };
   }
 
@@ -52,22 +77,23 @@ async function resolveRecorder(audioPath: string): Promise<RecorderCommand> {
       return {
         command: "sox",
         args: ["-q", "-t", "waveaudio", "default", "-r", "16000", "-c", "1", "-b", "16", "-e", "signed-integer", audioPath],
-        installHint: soxInstallHint(),
+        installHint,
       };
     }
 
     return {
       command: "sox",
       args: ["-q", "-d", "-r", "16000", "-c", "1", "-b", "16", "-e", "signed-integer", audioPath],
-      installHint: soxInstallHint(),
+      installHint,
     };
   }
 
-  throw new RecorderError(soxInstallHint());
+  throw new RecorderError(installHint);
 }
 
 export async function startRecording(audioPath: string): Promise<RecordingSession> {
-  const recorder = await resolveRecorder(audioPath);
+  const settings = await loadVoiceSettings();
+  const recorder = await resolveRecorder(audioPath, settings.device);
   let processError: Error | undefined;
   let stderr = "";
   let closed = false;
@@ -105,7 +131,7 @@ export async function startRecording(audioPath: string): Promise<RecordingSessio
     child.once("exit", (code) => {
       clearTimeout(readyTimer);
       if (code !== null && code !== 0) {
-        reject(new RecorderError(`Microphone recording failed to start${stderr ? `:\n${stderr.trim()}` : "."}\n${recorder.installHint}`));
+        reject(new RecorderError(`Microphone recording failed to start using ${formatDevice(settings.device)}${stderr ? `:\n${stderr.trim()}` : "."}\nUse /voicesettings to choose another microphone.\n${recorder.installHint}`));
       } else {
         resolve();
       }
@@ -130,7 +156,7 @@ export async function startRecording(audioPath: string): Promise<RecordingSessio
         throw new RecorderError(`Microphone recording failed: ${processError.message}`, processError);
       }
       if (closeCode !== null && closeCode !== 0 && closeCode !== 130) {
-        throw new RecorderError(`Microphone recording failed${stderr ? `:\n${stderr.trim()}` : "."}`);
+        throw new RecorderError(`Microphone recording failed using ${formatDevice(settings.device)}${stderr ? `:\n${stderr.trim()}` : "."}\nUse /voicesettings to choose another microphone.`);
       }
       return audioPath;
     },
