@@ -3,7 +3,7 @@ import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-wo
 import { startLiveTranscription, transcribeFile, type LiveTranscriptionSession } from "./deepgram.js";
 import { startRecording, startStreamingRecording, type RecordingSession } from "./recorder.js";
 import { createTempAudioFile } from "./temp.js";
-import { formatDevice, listAudioInputDevices, loadVoiceSettings, saveVoiceSettings } from "./settings.js";
+import { defaultVoiceSettings, formatDevice, listAudioInputDevices, loadVoiceSettings, saveVoiceSettings, type VoiceSettings } from "./settings.js";
 
 const STATUS_KEY = "deepgram-voice";
 const WIDGET_KEY = "deepgram-voice";
@@ -162,23 +162,61 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("voicesettings", {
-    description: "Select the microphone input used by Deepgram voice recording",
+    description: "Configure Deepgram voice recording settings (microphone, model, language)",
     handler: async (args, ctx) => {
       const action = args.trim().toLowerCase();
+      const settings = await loadVoiceSettings();
+
       if (action === "show") {
-        const settings = await loadVoiceSettings();
-        ctx.ui.notify(`Voice microphone: ${formatDevice(settings.device)}`, "info");
+        ctx.ui.notify(formatVoiceSettings(settings), "info");
         return;
       }
 
       if (action === "reset") {
-        const [defaultDevice] = await listAudioInputDevices();
-        await saveVoiceSettings({ device: defaultDevice });
-        ctx.ui.notify(`Voice microphone reset to ${formatDevice(defaultDevice)}`, "info");
+        await saveVoiceSettings(defaultVoiceSettings());
+        ctx.ui.notify("Voice settings reset to defaults.", "info");
         return;
       }
 
-      const settings = await loadVoiceSettings();
+      const selectedAction = action || await ctx.ui.select("Voice settings", [
+        "microphone — select audio input",
+        "model — edit Deepgram model",
+        "language — edit transcription language",
+        "show — display current settings",
+        "reset — restore defaults",
+      ]);
+      if (!selectedAction) {
+        ctx.ui.notify("Voice settings cancelled", "info");
+        return;
+      }
+
+      if (selectedAction.startsWith("show")) {
+        ctx.ui.notify(formatVoiceSettings(settings), "info");
+        return;
+      }
+
+      if (selectedAction.startsWith("reset")) {
+        await saveVoiceSettings(defaultVoiceSettings());
+        ctx.ui.notify("Voice settings reset to defaults.", "info");
+        return;
+      }
+
+      if (selectedAction.startsWith("model")) {
+        const model = await promptVoiceSetting(ctx, "Deepgram model", settings.model, ["nova-3", "nova-2", "enhanced", "base"]);
+        if (!model) return;
+        await saveVoiceSettings({ ...settings, model });
+        ctx.ui.notify(`Voice Deepgram model set to ${model}`, "info");
+        return;
+      }
+
+      if (selectedAction.startsWith("language")) {
+        const language = await promptVoiceSetting(ctx, "Deepgram language", settings.language, ["en-US", "en", "en-GB", "es", "fr", "de", "it", "pt", "nl", "ja", "ko", "zh"]);
+        if (!language) return;
+        await saveVoiceSettings({ ...settings, language });
+        ctx.ui.notify(`Voice Deepgram language set to ${language}`, "info");
+        return;
+      }
+
       const devices = await listAudioInputDevices();
       const labels = devices.map((device, index) => {
         const current = device.kind === settings.device.kind && device.id === settings.device.id ? "current — " : "";
@@ -198,7 +236,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      await saveVoiceSettings({ device });
+      await saveVoiceSettings({ ...settings, device });
       ctx.ui.notify(`Voice microphone set to ${formatDevice(device)}`, "info");
     },
   });
@@ -206,6 +244,35 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     ctx.ui.notify(`Deepgram voice loaded: /voice or ${SHORTCUT}`, "info");
   });
+}
+
+function formatVoiceSettings(settings: VoiceSettings): string {
+  return [
+    `Voice microphone: ${formatDevice(settings.device)}`,
+    `Deepgram model: ${process.env.DEEPGRAM_MODEL ? `${process.env.DEEPGRAM_MODEL} (from DEEPGRAM_MODEL env)` : settings.model}`,
+    `Deepgram language: ${process.env.DEEPGRAM_LANGUAGE ? `${process.env.DEEPGRAM_LANGUAGE} (from DEEPGRAM_LANGUAGE env)` : settings.language}`,
+  ].join("\n");
+}
+
+async function promptVoiceSetting(ctx: VoiceContext, label: string, current: string, presets: string[]): Promise<string | undefined> {
+  const choices = [...presets.map((value) => value === current ? `current — ${value}` : value), "custom..."];
+  const choice = await ctx.ui.select(`${label} (current: ${current})`, choices);
+  if (!choice) {
+    ctx.ui.notify(`${label} unchanged`, "info");
+    return undefined;
+  }
+
+  if (choice === "custom...") {
+    const value = await ctx.ui.input(label, current);
+    const trimmed = value?.trim();
+    if (!trimmed) {
+      ctx.ui.notify(`${label} unchanged`, "info");
+      return undefined;
+    }
+    return trimmed;
+  }
+
+  return choice.replace(/^current — /, "").trim();
 }
 
 async function runPrerecordedFallback(pi: ExtensionAPI, ctx: VoiceContext, audioPath: string): Promise<void> {
