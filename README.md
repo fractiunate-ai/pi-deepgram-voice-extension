@@ -9,8 +9,9 @@ This project intentionally does **not** use `yukukotani/pi-voice`, does **not** 
 ```text
 /voice          Start voice recording
 /voicesettings  Select the microphone input used by /voice
-Alt+J           Start/stop voice recording
-Enter/Escape    Stop an active recording
+Alt+J           Start/stop voice recording and transcribe
+Enter           Stop an active recording and transcribe
+Escape          Discard an active recording without transcribing
 ```
 
 Additional settings helpers:
@@ -27,8 +28,9 @@ Additional settings helpers:
 - Registers the `Alt+J` TUI shortcut
 - Shows a Pi TUI status/widget while recording or transcribing
 - Records microphone audio to a temporary WAV file using SoX
-- Stops recording when you press `Enter`, `Escape`, or `Alt+J` again
-- Sends the prerecorded file to Deepgram speech-to-text
+- Stops and transcribes when you press `Enter` or `Alt+J` again
+- Discards without transcribing when you press `Escape`
+- Sends submitted recordings to Deepgram speech-to-text
 - Sends the transcript into Pi as a normal user message
 - Removes temporary audio after transcription or error handling
 
@@ -151,8 +153,8 @@ Alt+J
 1. Optional: run `/voicesettings` and select the microphone input.
 2. Trigger `/voice` or press `Alt+J`.
 3. Speak while the widget says recording is active.
-4. Press `Enter`, `Escape`, or `Alt+J` again to stop.
-5. The extension transcribes the temporary WAV file with Deepgram.
+4. Press `Enter` or `Alt+J` again to stop and transcribe, or press `Escape` to discard.
+5. Submitted recordings are transcribed with Deepgram.
 6. The transcript is sent into Pi as a user message.
 
 ## Limitations

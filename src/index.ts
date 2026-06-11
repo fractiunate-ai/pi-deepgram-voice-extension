@@ -10,11 +10,13 @@ const WIDGET_KEY = "deepgram-voice";
 const SHORTCUT = "alt+j";
 
 type VoiceContext = ExtensionCommandContext;
+type StopAction = "submit" | "discard";
 
 interface ActiveRecording {
   session: RecordingSession;
-  endUi?: () => void;
+  endUi?: (action: StopAction) => void;
   stopRequested?: boolean;
+  stopAction?: StopAction;
 }
 
 let activeRecording: ActiveRecording | undefined;
@@ -24,7 +26,8 @@ export default function (pi: ExtensionAPI) {
   async function runVoice(ctx: VoiceContext): Promise<void> {
     if (activeRecording) {
       activeRecording.stopRequested = true;
-      activeRecording.endUi?.();
+      activeRecording.stopAction = "submit";
+      activeRecording.endUi?.("submit");
       return;
     }
 
@@ -51,14 +54,23 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.setStatus(STATUS_KEY, "🎙 recording");
       ctx.ui.setWidget(WIDGET_KEY, [
         "🎙 Deepgram voice recording active",
-        `Press Enter, Escape, or ${SHORTCUT} to stop and transcribe.`,
+        `Press Enter or ${SHORTCUT} to stop and transcribe. Press Escape to discard.`,
       ]);
 
       const session = await startRecording(temp.path);
       activeRecording = { session };
       starting = false;
 
-      await waitForStop(ctx);
+      const stopAction = await waitForStop(ctx);
+
+      if (stopAction === "discard") {
+        ctx.ui.setStatus(STATUS_KEY, "🎙 discarded");
+        ctx.ui.setWidget(WIDGET_KEY, ["🎙 Recording discarded"]);
+        await session.abort();
+        activeRecording = undefined;
+        ctx.ui.notify("Voice recording discarded.", "info");
+        return;
+      }
 
       ctx.ui.setStatus(STATUS_KEY, "🎙 transcribing");
       ctx.ui.setWidget(WIDGET_KEY, ["🎙 Recording stopped", "Transcribing with Deepgram..."]);
@@ -155,21 +167,24 @@ export default function (pi: ExtensionAPI) {
   });
 }
 
-async function waitForStop(ctx: VoiceContext): Promise<void> {
-  if (activeRecording?.stopRequested) return;
+async function waitForStop(ctx: VoiceContext): Promise<StopAction> {
+  if (activeRecording?.stopRequested) return activeRecording.stopAction ?? "submit";
 
-  await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+  return await ctx.ui.custom<StopAction>((tui, theme, _keybindings, done) => {
     const lines = [
       theme.fg("accent", "🎙 Deepgram voice recording"),
       "",
       "Speak now.",
       "",
-      theme.fg("muted", `Press Enter, Escape, or ${SHORTCUT} to stop.`),
+      theme.fg("muted", `Press Enter or ${SHORTCUT} to transcribe. Press Escape to discard.`),
     ];
 
-    const finish = () => {
-      if (activeRecording) activeRecording.stopRequested = true;
-      done();
+    const finish = (action: StopAction) => {
+      if (activeRecording) {
+        activeRecording.stopRequested = true;
+        activeRecording.stopAction = action;
+      }
+      done(action);
       return true;
     };
 
@@ -179,8 +194,11 @@ async function waitForStop(ctx: VoiceContext): Promise<void> {
       render: () => lines,
       invalidate: () => {},
       handleInput: (key: string) => {
-        if (matchesKey(key, Key.enter) || matchesKey(key, Key.escape) || matchesKey(key, SHORTCUT)) {
-          return finish();
+        if (matchesKey(key, Key.escape)) {
+          return finish("discard");
+        }
+        if (matchesKey(key, Key.enter) || matchesKey(key, SHORTCUT)) {
+          return finish("submit");
         }
         tui.requestRender();
         return true;
