@@ -10,7 +10,12 @@ export type AudioInputDevice =
 
 export interface VoiceSettings {
   device: AudioInputDevice;
+  model: string;
+  language: string;
 }
+
+export const DEFAULT_DEEPGRAM_MODEL = "nova-3";
+export const DEFAULT_DEEPGRAM_LANGUAGE = "en-US";
 
 const DEFAULT_DEVICE: AudioInputDevice = {
   kind: "default",
@@ -21,16 +26,19 @@ const DEFAULT_DEVICE: AudioInputDevice = {
 const SETTINGS_PATH = join(homedir(), ".config", "pi-deepgram-voice-extension", "settings.json");
 
 export function defaultVoiceSettings(): VoiceSettings {
-  return { device: DEFAULT_DEVICE };
+  return { device: DEFAULT_DEVICE, model: DEFAULT_DEEPGRAM_MODEL, language: DEFAULT_DEEPGRAM_LANGUAGE };
 }
 
 export async function loadVoiceSettings(): Promise<VoiceSettings> {
   try {
     const raw = await readFile(SETTINGS_PATH, "utf8");
     const parsed = JSON.parse(raw) as Partial<VoiceSettings>;
-    if (isAudioInputDevice(parsed.device)) {
-      return { device: parsed.device };
-    }
+    const defaults = defaultVoiceSettings();
+    return {
+      device: isAudioInputDevice(parsed.device) ? parsed.device : defaults.device,
+      model: isNonEmptyString(parsed.model) ? parsed.model : defaults.model,
+      language: isNonEmptyString(parsed.language) ? parsed.language : defaults.language,
+    };
   } catch {
     // Missing or invalid settings fall back to default.
   }
@@ -118,6 +126,10 @@ function dedupeDevices(devices: AudioInputDevice[]): AudioInputDevice[] {
     seen.add(key);
     return true;
   });
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function isAudioInputDevice(value: unknown): value is AudioInputDevice {

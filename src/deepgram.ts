@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { DeepgramClient } from "@deepgram/sdk";
+import { loadVoiceSettings } from "./settings.js";
 
 export class DeepgramTranscriptionError extends Error {
   constructor(message: string, public readonly cause?: unknown) {
@@ -24,6 +25,7 @@ const LIVE_FINALIZE_TIMEOUT_MS = 2500;
 
 export async function transcribeFile(audioPath: string, options: { rawLinear16?: boolean } = {}): Promise<string> {
   const apiKey = getApiKey();
+  const settings = await loadVoiceSettings();
 
   const fileStats = await stat(audioPath);
   if (fileStats.size < 1024) {
@@ -35,8 +37,8 @@ export async function transcribeFile(audioPath: string, options: { rawLinear16?:
   let result: unknown;
   try {
     result = await client.listen.v1.media.transcribeFile(createReadStream(audioPath), {
-      model: process.env.DEEPGRAM_MODEL ?? "nova-3",
-      language: process.env.DEEPGRAM_LANGUAGE ?? "en-US",
+      model: process.env.DEEPGRAM_MODEL ?? settings.model,
+      language: process.env.DEEPGRAM_LANGUAGE ?? settings.language,
       ...(options.rawLinear16 ? { encoding: "linear16", sample_rate: 16000, channels: 1 } : {}),
       smart_format: true,
       punctuate: true,
@@ -56,6 +58,7 @@ export async function transcribeFile(audioPath: string, options: { rawLinear16?:
 
 export async function startLiveTranscription(onTranscript: (transcript: string) => void): Promise<LiveTranscriptionSession> {
   const apiKey = getApiKey();
+  const settings = await loadVoiceSettings();
   const client = new DeepgramClient({ apiKey });
   const state: TranscriptState = { finalSegments: [], interim: "" };
   let finalized = false;
@@ -65,8 +68,8 @@ export async function startLiveTranscription(onTranscript: (transcript: string) 
   let rejectFinal: ((error: Error) => void) | undefined;
 
   const connection = await client.listen.v1.connect({
-    model: process.env.DEEPGRAM_MODEL ?? "nova-3",
-    language: process.env.DEEPGRAM_LANGUAGE ?? "en-US",
+    model: process.env.DEEPGRAM_MODEL ?? settings.model,
+    language: process.env.DEEPGRAM_LANGUAGE ?? settings.language,
     encoding: "linear16",
     sample_rate: 16000,
     channels: 1,
