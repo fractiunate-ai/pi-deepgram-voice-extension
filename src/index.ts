@@ -14,6 +14,7 @@ type VoiceContext = ExtensionCommandContext;
 interface ActiveRecording {
   session: RecordingSession;
   endUi?: () => void;
+  stopRequested?: boolean;
 }
 
 let activeRecording: ActiveRecording | undefined;
@@ -22,6 +23,7 @@ let starting = false;
 export default function (pi: ExtensionAPI) {
   async function runVoice(ctx: VoiceContext): Promise<void> {
     if (activeRecording) {
+      activeRecording.stopRequested = true;
       activeRecording.endUi?.();
       return;
     }
@@ -42,9 +44,10 @@ export default function (pi: ExtensionAPI) {
     }
 
     starting = true;
-    const temp = await createTempAudioFile();
+    let temp: Awaited<ReturnType<typeof createTempAudioFile>> | undefined;
 
     try {
+      temp = await createTempAudioFile();
       ctx.ui.setStatus(STATUS_KEY, "🎙 recording");
       ctx.ui.setWidget(WIDGET_KEY, [
         "🎙 Deepgram voice recording active",
@@ -87,7 +90,7 @@ export default function (pi: ExtensionAPI) {
       activeRecording = undefined;
       ctx.ui.setStatus(STATUS_KEY, undefined);
       ctx.ui.setWidget(WIDGET_KEY, undefined);
-      await temp.cleanup();
+      await temp?.cleanup();
     }
   }
 
@@ -124,9 +127,9 @@ export default function (pi: ExtensionAPI) {
 
       const settings = await loadVoiceSettings();
       const devices = await listAudioInputDevices();
-      const labels = devices.map((device) => {
+      const labels = devices.map((device, index) => {
         const current = device.kind === settings.device.kind && device.id === settings.device.id ? "current — " : "";
-        return `${current}${formatDevice(device)}`;
+        return `${index + 1}. ${current}${formatDevice(device)}`;
       });
 
       const choice = await ctx.ui.select("Select microphone input for /voice", labels);
@@ -153,6 +156,8 @@ export default function (pi: ExtensionAPI) {
 }
 
 async function waitForStop(ctx: VoiceContext): Promise<void> {
+  if (activeRecording?.stopRequested) return;
+
   await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
     const lines = [
       theme.fg("accent", "🎙 Deepgram voice recording"),
@@ -163,11 +168,12 @@ async function waitForStop(ctx: VoiceContext): Promise<void> {
     ];
 
     const finish = () => {
+      if (activeRecording) activeRecording.stopRequested = true;
       done();
       return true;
     };
 
-    activeRecording!.endUi = () => done();
+    activeRecording!.endUi = finish;
 
     return {
       render: () => lines,

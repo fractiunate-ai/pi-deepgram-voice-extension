@@ -1,66 +1,92 @@
 # pi-deepgram-voice-extension
 
-Native Pi TUI extension for Deepgram voice input. It runs inside the active Pi TUI process and sends the transcript as a normal user message, as if you typed it yourself.
+Native Pi TUI extension for Deepgram voice input. The extension runs inside the active Pi TUI process, records a short push-to-talk audio file, transcribes it with Deepgram, and submits the transcript with `pi.sendUserMessage()` so it behaves like text you typed into Pi yourself.
 
-This project intentionally does **not** use `yukukotani/pi-voice`, does **not** run a companion daemon, and does **not** add TTS or live streaming yet.
+This project intentionally does **not** use `yukukotani/pi-voice`, does **not** run a separate daemon, and does **not** include TTS or live streaming.
+
+## Commands and hotkey
+
+```text
+/voice          Start voice recording
+/voicesettings  Select the microphone input used by /voice
+Alt+J           Start/stop voice recording
+Enter/Escape    Stop an active recording
+```
+
+Additional settings helpers:
+
+```text
+/voicesettings show   Show the selected microphone
+/voicesettings reset  Reset to the system default microphone
+```
 
 ## What it does
 
 - Registers `/voice`
-- Registers `/voicesettings` to choose the microphone input
-- Registers `alt+j`
-- Shows a Pi TUI status/widget while recording
-- Records microphone audio to a temporary WAV file using SoX/`rec`
-- Stops when you press `Enter`, `Escape`, or `alt+j` again
-- Sends the prerecorded file to Deepgram for speech-to-text
-- Sends the transcript with `pi.sendUserMessage()` so it behaves like typed input
-- Clears the status/widget afterward
+- Registers `/voicesettings`
+- Registers the `Alt+J` TUI shortcut
+- Shows a Pi TUI status/widget while recording or transcribing
+- Records microphone audio to a temporary WAV file using SoX
+- Stops recording when you press `Enter`, `Escape`, or `Alt+J` again
+- Sends the prerecorded file to Deepgram speech-to-text
+- Sends the transcript into Pi as a normal user message
+- Removes temporary audio after transcription or error handling
 
 ## Requirements
 
 ### Deepgram API key
 
+Set the API key before launching Pi:
+
 ```bash
 export DEEPGRAM_API_KEY="..."
 ```
 
-Optional:
+Optional Deepgram settings:
 
 ```bash
 export DEEPGRAM_MODEL="nova-3"
 export DEEPGRAM_LANGUAGE="en-US"
 ```
 
-### Local recorder dependency
+Defaults:
 
-Install SoX so the `rec` command is available:
+- `DEEPGRAM_MODEL`: `nova-3`
+- `DEEPGRAM_LANGUAGE`: `en-US`
+
+### Local audio recording dependency
+
+Install SoX. On Linux/WSL, `pulseaudio-utils` and `alsa-utils` are recommended so `/voicesettings` can discover inputs.
 
 ```bash
 # macOS
 brew install sox
 
 # Debian/Ubuntu/WSL
-sudo apt-get update && sudo apt-get install -y sox libsox-fmt-all pulseaudio-utils alsa-utils
+sudo apt-get update
+sudo apt-get install -y sox libsox-fmt-all pulseaudio-utils alsa-utils
 
 # Windows native
 winget install ChrisBagwell.SoX
 ```
 
-## WSL and Windows hotkey note
+## WSL notes
 
-Pi TUI extensions run inside the Pi process. If Pi is running in WSL, the extension runs in WSL too.
+When Pi runs inside WSL, this extension also runs inside WSL. Microphone devices are whatever WSL exposes to Linux audio tools.
 
-That means:
+Commonly, Windows audio input appears as a PulseAudio source such as:
 
-- Windows global hotkeys like `Win+J` are not delivered directly to a terminal app inside WSL.
-- Use Pi's in-terminal shortcut `alt+j`, or map `Win+J` on the Windows host to send `Alt+J` to Windows Terminal/WezTerm/etc.
-- Microphone recording must be available inside WSL. If SoX cannot access your mic, either configure WSL/PulseAudio microphone input or run Pi natively on the host OS.
-
-Example AutoHotkey v2 mapping on Windows:
-
-```ahk
-#j::Send "!j"
+```text
+RDPSource (pulse: RDPSource)
 ```
+
+Select it with:
+
+```text
+/voicesettings
+```
+
+If you switch microphones in Windows, WSL may still show the same redirected source name. In that case, choose the desired input device in Windows sound settings, then keep using the WSL-exposed source in Pi.
 
 ## Installation from local clone
 
@@ -70,11 +96,9 @@ cd pi-deepgram-voice-extension
 bun install
 ```
 
-Then either run with `pi -e` for testing, or place/clone it in Pi's global extension directory.
-
 ## Installation via Pi extension path
 
-Clone or copy this repo to:
+Clone or copy this repo to Pi's global extension directory:
 
 ```bash
 ~/.pi/agent/extensions/pi-deepgram-voice-extension/
@@ -91,7 +115,11 @@ Start or reload Pi:
 
 ```bash
 pi
-# then inside Pi:
+```
+
+Inside Pi:
+
+```text
 /reload
 ```
 
@@ -108,43 +136,34 @@ pi -e ./src/index.ts
 Inside the Pi TUI:
 
 ```text
-/voice
-```
-
-Select microphone input:
-
-```text
 /voicesettings
-```
-
-Show/reset microphone settings:
-
-```text
-/voicesettings show
-/voicesettings reset
+/voice
 ```
 
 or press:
 
 ```text
-alt+j
+Alt+J
 ```
 
 ## Usage
 
-1. Optional: run `/voicesettings` to select your microphone input.
-2. Trigger `/voice` or `alt+j`.
+1. Optional: run `/voicesettings` and select the microphone input.
+2. Trigger `/voice` or press `Alt+J`.
 3. Speak while the widget says recording is active.
-4. Press `Enter`, `Escape`, or `alt+j` again to stop.
-5. The extension transcribes with Deepgram and sends the transcript into Pi as a user message.
+4. Press `Enter`, `Escape`, or `Alt+J` again to stop.
+5. The extension transcribes the temporary WAV file with Deepgram.
+6. The transcript is sent into Pi as a user message.
 
-## Limitation
+## Limitations
 
-This initial version uses prerecorded push-to-talk transcription. It does **not** use Deepgram live streaming yet.
+- This initial version uses prerecorded push-to-talk transcription, not live streaming.
+- It depends on SoX and the microphone devices visible to the Pi process.
+- In WSL, device names may be virtual/redirected rather than the physical microphone name.
 
 ## Security note
 
-Your recorded audio is sent to Deepgram for transcription. Do not use this extension for audio you do not want sent to Deepgram.
+Recorded audio is sent to Deepgram for transcription. Do not use this extension for audio you do not want sent to Deepgram.
 
 ## Development
 
@@ -152,16 +171,4 @@ Your recorded audio is sent to Deepgram for transcription. Do not use this exten
 bun install
 bun run typecheck
 pi -e ./src/index.ts
-```
-
-Planned branch:
-
-```bash
-git checkout -b feature/deepgram-voice-extension
-```
-
-Suggested commit message:
-
-```bash
-git commit -m "Add Deepgram voice input extension"
 ```

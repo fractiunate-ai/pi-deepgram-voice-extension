@@ -1,4 +1,5 @@
 import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import { DeepgramClient } from "@deepgram/sdk";
 
 export class DeepgramTranscriptionError extends Error {
@@ -14,6 +15,11 @@ export async function transcribeFile(audioPath: string): Promise<string> {
     throw new DeepgramTranscriptionError(
       "DEEPGRAM_API_KEY is missing. Set it before launching Pi, e.g. `export DEEPGRAM_API_KEY=\"...\"`.",
     );
+  }
+
+  const fileStats = await stat(audioPath);
+  if (fileStats.size < 1024) {
+    throw new DeepgramTranscriptionError("Recorded audio file is empty or too short. Check microphone input and try again.");
   }
 
   const client = new DeepgramClient({ apiKey });

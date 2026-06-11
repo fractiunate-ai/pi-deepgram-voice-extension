@@ -22,10 +22,10 @@ interface RecorderCommand {
 
 function soxInstallHint(): string {
   return [
-    "The `rec` command from SoX is required for audio recording.",
+    "SoX (`rec` or `sox`) is required for audio recording.",
     "Install SoX, then restart Pi:",
     "  macOS:  brew install sox",
-    "  Debian/Ubuntu/WSL: sudo apt-get install sox libsox-fmt-all",
+    "  Debian/Ubuntu/WSL: sudo apt-get install sox libsox-fmt-all pulseaudio-utils alsa-utils",
     "  Windows native: winget install ChrisBagwell.SoX",
     "Note: when Pi runs inside WSL, the microphone must be available inside WSL/PulseAudio. Windows host hotkeys and host microphone capture are not automatically forwarded to WSL.",
   ].join("\n");
