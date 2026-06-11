@@ -1,17 +1,16 @@
 # pi-deepgram-voice-extension
 
-Native Pi TUI extension for Deepgram voice input. The extension runs inside the active Pi TUI process, records a short push-to-talk audio file, transcribes it with Deepgram, and submits the transcript with `pi.sendUserMessage()` so it behaves like text you typed into Pi yourself.
+Native Pi TUI extension for Deepgram voice input. The extension runs inside the active Pi TUI process, streams push-to-talk microphone audio to Deepgram, shows live transcript updates while you speak, and submits only the final transcript with `pi.sendUserMessage()` after you stop recording.
 
-This project intentionally does **not** use `yukukotani/pi-voice`, does **not** run a separate daemon, and does **not** include TTS or live streaming.
+This project intentionally does **not** use `yukukotani/pi-voice`, does **not** run a separate daemon, and does **not** include TTS.
 
 ## Commands and hotkey
 
 ```text
 /voice          Start voice recording
 /voicesettings  Select the microphone input used by /voice
-Alt+J           Start/stop voice recording and transcribe
-Enter           Stop an active recording and transcribe
-Escape          Discard an active recording without transcribing
+Alt+J           Start/stop voice recording
+Enter/Escape    Stop an active recording
 ```
 
 Additional settings helpers:
@@ -26,13 +25,13 @@ Additional settings helpers:
 - Registers `/voice`
 - Registers `/voicesettings`
 - Registers the `Alt+J` TUI shortcut
-- Shows a Pi TUI status/widget while recording or transcribing
-- Records microphone audio to a temporary WAV file using SoX
-- Stops and transcribes when you press `Enter` or `Alt+J` again
-- Discards without transcribing when you press `Escape`
-- Sends submitted recordings to Deepgram speech-to-text
-- Sends the transcript into Pi as a normal user message
-- Removes temporary audio after transcription or error handling
+- Uses the microphone selected by `/voicesettings`
+- Streams raw 16 kHz mono PCM audio to Deepgram live transcription
+- Shows current transcript chunks in the Pi TUI as Deepgram updates them
+- Stops recording when you press `Enter`, `Escape`, or `Alt+J` again
+- Submits only the final transcript after recording stops
+- Falls back to prerecorded Deepgram transcription if live streaming fails
+- Removes temporary fallback audio after transcription or error handling
 
 ## Requirements
 
@@ -49,12 +48,16 @@ Optional Deepgram settings:
 ```bash
 export DEEPGRAM_MODEL="nova-3"
 export DEEPGRAM_LANGUAGE="en-US"
+export DEEPGRAM_ENDPOINTING="300"
 ```
 
 Defaults:
 
 - `DEEPGRAM_MODEL`: `nova-3`
 - `DEEPGRAM_LANGUAGE`: `en-US`
+- `DEEPGRAM_ENDPOINTING`: `300`
+
+`DEEPGRAM_ENDPOINTING` is the Deepgram live endpointing silence duration in milliseconds.
 
 ### Local audio recording dependency
 
@@ -153,19 +156,20 @@ Alt+J
 1. Optional: run `/voicesettings` and select the microphone input.
 2. Trigger `/voice` or press `Alt+J`.
 3. Speak while the widget says recording is active.
-4. Press `Enter` or `Alt+J` again to stop and transcribe, or press `Escape` to discard.
-5. Submitted recordings are transcribed with Deepgram.
-6. The transcript is sent into Pi as a user message.
+4. Watch the transcript update in the TUI as chunks arrive from Deepgram.
+5. Press `Enter`, `Escape`, or `Alt+J` again to stop.
+6. The final transcript is sent into Pi as a user message.
 
 ## Limitations
 
-- This initial version uses prerecorded push-to-talk transcription, not live streaming.
+- This is push-to-talk streaming, not always-on listening.
 - It depends on SoX and the microphone devices visible to the Pi process.
 - In WSL, device names may be virtual/redirected rather than the physical microphone name.
+- If live streaming fails, the extension falls back to prerecorded transcription for that recording.
 
 ## Security note
 
-Recorded audio is sent to Deepgram for transcription. Do not use this extension for audio you do not want sent to Deepgram.
+Recorded audio is streamed to Deepgram for transcription. If live streaming fails, temporary fallback audio is also sent to Deepgram for prerecorded transcription. Do not use this extension for audio you do not want sent to Deepgram.
 
 ## Development
 
