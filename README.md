@@ -7,10 +7,10 @@ This project intentionally does **not** use `yukukotani/pi-voice`, does **not** 
 ## What it does
 
 - Registers `/voice`
-- Registers `ctrl+shift+v`
+- Registers `ctrl+alt+j`
 - Shows a Pi TUI status/widget while recording
 - Records microphone audio to a temporary WAV file using SoX/`rec`
-- Stops when you press `Enter`, `Escape`, or `ctrl+shift+v` again
+- Stops when you press `Enter`, `Escape`, or `ctrl+alt+j` again
 - Sends the prerecorded file to Deepgram for speech-to-text
 - Sends the transcript with `pi.sendUserMessage()` so it behaves like typed input
 - Clears the status/widget afterward
@@ -52,13 +52,13 @@ Pi TUI extensions run inside the Pi process. If Pi is running in WSL, the extens
 That means:
 
 - Windows global hotkeys like `Win+J` are not delivered directly to a terminal app inside WSL.
-- Use Pi's in-terminal shortcut `ctrl+shift+v`, or map `Win+J` on the Windows host to send `Ctrl+Shift+V` to Windows Terminal/WezTerm/etc.
+- Use Pi's in-terminal shortcut `ctrl+alt+j`, or map `Win+J` on the Windows host to send `Ctrl+Alt+J` to Windows Terminal/WezTerm/etc.
 - Microphone recording must be available inside WSL. If SoX cannot access your mic, either configure WSL/PulseAudio microphone input or run Pi natively on the host OS.
 
 Example AutoHotkey v2 mapping on Windows:
 
 ```ahk
-#j::Send "^+v"
+#j::Send "^!j"
 ```
 
 ## Installation from local clone
@@ -113,14 +113,14 @@ Inside the Pi TUI:
 or press:
 
 ```text
-ctrl+shift+v
+ctrl+alt+j
 ```
 
 ## Usage
 
-1. Trigger `/voice` or `ctrl+shift+v`.
+1. Trigger `/voice` or `ctrl+alt+j`.
 2. Speak while the widget says recording is active.
-3. Press `Enter`, `Escape`, or `ctrl+shift+v` again to stop.
+3. Press `Enter`, `Escape`, or `ctrl+alt+j` again to stop.
 4. The extension transcribes with Deepgram and sends the transcript into Pi as a user message.
 
 ## Limitation
