@@ -5,16 +5,17 @@ import { tmpdir } from "node:os";
 export interface TempAudioFile {
   dir: string;
   path: string;
+  rawPath: string;
   cleanup: () => Promise<void>;
 }
 
 export async function createTempAudioFile(): Promise<TempAudioFile> {
   const dir = await mkdtemp(join(tmpdir(), "pi-deepgram-voice-"));
-  const path = join(dir, "recording.wav");
 
   return {
     dir,
-    path,
+    path: join(dir, "recording.wav"),
+    rawPath: join(dir, "recording.raw"),
     cleanup: async () => {
       await rm(dir, { recursive: true, force: true });
     },

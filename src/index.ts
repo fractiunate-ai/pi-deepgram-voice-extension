@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey } from "@earendil-works/pi-tui";
-import { transcribeFile } from "./deepgram.js";
-import { startRecording, type RecordingSession } from "./recorder.js";
+import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { startLiveTranscription, transcribeFile, type LiveTranscriptionSession } from "./deepgram.js";
+import { startRecording, startStreamingRecording, type RecordingSession } from "./recorder.js";
 import { createTempAudioFile } from "./temp.js";
 import { formatDevice, listAudioInputDevices, loadVoiceSettings, saveVoiceSettings } from "./settings.js";
 
@@ -10,19 +10,26 @@ const WIDGET_KEY = "deepgram-voice";
 const SHORTCUT = "alt+j";
 
 type VoiceContext = ExtensionCommandContext;
+type TranscriptDisposition = "send" | "editor";
 
 interface ActiveRecording {
   session: RecordingSession;
-  endUi?: () => void;
+  startedAt: number;
+  editorPrefix: string;
+  endUi?: (disposition?: TranscriptDisposition) => void;
+  stopRequested?: boolean;
+  disposition?: TranscriptDisposition;
 }
 
 let activeRecording: ActiveRecording | undefined;
 let starting = false;
 
 export default function (pi: ExtensionAPI) {
-  async function runVoice(ctx: VoiceContext): Promise<void> {
+  async function runVoice(ctx: VoiceContext, activeDisposition: TranscriptDisposition = "send"): Promise<void> {
     if (activeRecording) {
-      activeRecording.endUi?.();
+      activeRecording.stopRequested = true;
+      activeRecording.disposition = activeDisposition;
+      activeRecording.endUi?.(activeDisposition);
       return;
     }
 
@@ -42,52 +49,101 @@ export default function (pi: ExtensionAPI) {
     }
 
     starting = true;
-    const temp = await createTempAudioFile();
+    let temp: Awaited<ReturnType<typeof createTempAudioFile>> | undefined;
+    let live: LiveTranscriptionSession | undefined;
 
     try {
-      ctx.ui.setStatus(STATUS_KEY, "🎙 recording");
-      ctx.ui.setWidget(WIDGET_KEY, [
-        "🎙 Deepgram voice recording active",
-        `Press Enter, Escape, or ${SHORTCUT} to stop and transcribe.`,
-      ]);
+      temp = await createTempAudioFile();
+      let liveTranscript = "";
+      let requestUiRender: (() => void) | undefined;
 
-      const session = await startRecording(temp.path);
-      activeRecording = { session };
-      starting = false;
+      ctx.ui.setStatus(STATUS_KEY, "🎙 connecting");
+      setVoiceWidget(ctx, "connecting", "");
 
-      await waitForStop(ctx);
+      try {
+        let session: Awaited<ReturnType<typeof startStreamingRecording>>;
+        let pendingSession: ReturnType<typeof startStreamingRecording> | undefined;
+        try {
+          pendingSession = startStreamingRecording(temp.rawPath);
+          const [startedLive, startedSession] = await Promise.all([
+            startLiveTranscription((transcript) => {
+              liveTranscript = transcript;
+              if (activeRecording) setEditorDraft(ctx, activeRecording.editorPrefix, liveTranscript);
+              setVoiceWidget(ctx, "recording", liveTranscript);
+              requestUiRender?.();
+            }),
+            pendingSession,
+          ]);
+          live = startedLive;
+          session = startedSession;
+          activeRecording = { session, startedAt: Date.now(), editorPrefix: ctx.ui.getEditorText() };
+        } catch (error) {
+          const session = await pendingSession?.catch(() => undefined);
+          await session?.abort();
+          throw error;
+        }
+        session.stream.on("data", (chunk: Buffer) => live?.sendAudio(chunk));
+        session.begin();
+        starting = false;
 
-      ctx.ui.setStatus(STATUS_KEY, "🎙 transcribing");
-      ctx.ui.setWidget(WIDGET_KEY, ["🎙 Recording stopped", "Transcribing with Deepgram..."]);
+        ctx.ui.setStatus(STATUS_KEY, "🎙 live");
+        setVoiceWidget(ctx, "recording", liveTranscript);
 
-      const audioPath = await session.stop();
-      activeRecording = undefined;
+        await waitForStop(ctx, () => liveTranscript, (render) => {
+          requestUiRender = render;
+        });
 
-      const transcript = await transcribeFile(audioPath);
-      ctx.ui.notify(`Voice transcript: ${transcript}`, "info");
+        ctx.ui.setStatus(STATUS_KEY, "🎙 finalizing");
+        setVoiceWidget(ctx, "finalizing", liveTranscript);
 
-      if (ctx.isIdle()) {
-        pi.sendUserMessage(transcript);
-      } else {
-        pi.sendUserMessage(transcript, { deliverAs: "followUp" });
-        ctx.ui.notify("Agent is busy; queued voice transcript as follow-up.", "info");
+        const audioPath = await session.stop();
+        const recording = activeRecording;
+        const disposition = recording?.disposition ?? "send";
+        activeRecording = undefined;
+
+        let transcript: string;
+        try {
+          transcript = await live.finalize();
+        } catch (error) {
+          if (shouldCloseSilently(error, recording?.startedAt)) return;
+          ctx.ui.notify(`Live transcription failed; falling back to prerecorded transcription. ${formatError(error)}`, "warning");
+          try {
+            transcript = await transcribeFile(audioPath, { rawLinear16: true });
+          } catch (fallbackError) {
+            if (shouldCloseSilently(fallbackError, recording?.startedAt)) return;
+            throw fallbackError;
+          }
+        }
+
+        await submitTranscript(pi, ctx, transcript, disposition, recording?.editorPrefix);
+      } catch (error) {
+        if (shouldCloseSilently(error, activeRecording?.startedAt)) {
+          live?.close();
+          await abortActiveRecording();
+          return;
+        }
+
+        live?.close();
+        await abortActiveRecording();
+
+        ctx.ui.notify(`Live recording failed; falling back to prerecorded recording. ${formatError(error)}`, "warning");
+        await runPrerecordedFallback(pi, ctx, temp.path);
       }
     } catch (error) {
-      const recordingToAbort = activeRecording;
-      activeRecording = undefined;
+      if (shouldCloseSilently(error, (activeRecording as ActiveRecording | undefined)?.startedAt)) {
+        await abortActiveRecording();
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       ctx.ui.notify(message, "error");
-      try {
-        await recordingToAbort?.session.abort();
-      } catch {
-        // Best-effort cleanup only.
-      }
+      await abortActiveRecording();
     } finally {
+      live?.close();
       starting = false;
       activeRecording = undefined;
       ctx.ui.setStatus(STATUS_KEY, undefined);
       ctx.ui.setWidget(WIDGET_KEY, undefined);
-      await temp.cleanup();
+      await temp?.cleanup();
     }
   }
 
@@ -101,7 +157,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerShortcut(SHORTCUT, {
     description: "Toggle Deepgram voice input",
     handler: async (ctx) => {
-      await runVoice(ctx as VoiceContext);
+      await runVoice(ctx as VoiceContext, "editor");
     },
   });
 
@@ -124,9 +180,9 @@ export default function (pi: ExtensionAPI) {
 
       const settings = await loadVoiceSettings();
       const devices = await listAudioInputDevices();
-      const labels = devices.map((device) => {
+      const labels = devices.map((device, index) => {
         const current = device.kind === settings.device.kind && device.id === settings.device.id ? "current — " : "";
-        return `${current}${formatDevice(device)}`;
+        return `${index + 1}. ${current}${formatDevice(device)}`;
       });
 
       const choice = await ctx.ui.select("Select microphone input for /voice", labels);
@@ -152,33 +208,176 @@ export default function (pi: ExtensionAPI) {
   });
 }
 
-async function waitForStop(ctx: VoiceContext): Promise<void> {
-  await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
-    const lines = [
-      theme.fg("accent", "🎙 Deepgram voice recording"),
-      "",
-      "Speak now.",
-      "",
-      theme.fg("muted", `Press Enter, Escape, or ${SHORTCUT} to stop.`),
-    ];
+async function runPrerecordedFallback(pi: ExtensionAPI, ctx: VoiceContext, audioPath: string): Promise<void> {
+  ctx.ui.setStatus(STATUS_KEY, "🎙 recording");
+  setVoiceWidget(ctx, "fallback-recording", "");
 
-    const finish = () => {
+  const session = await startRecording(audioPath);
+  activeRecording = { session, startedAt: Date.now(), editorPrefix: ctx.ui.getEditorText() };
+  starting = false;
+
+  await waitForStop(ctx, () => "", () => undefined);
+
+  ctx.ui.setStatus(STATUS_KEY, "🎙 transcribing");
+  setVoiceWidget(ctx, "fallback-transcribing", "");
+
+  const recordedPath = await session.stop();
+  const recording = activeRecording;
+  const disposition = recording?.disposition ?? "send";
+  activeRecording = undefined;
+  try {
+    const transcript = await transcribeFile(recordedPath);
+    await submitTranscript(pi, ctx, transcript, disposition, recording?.editorPrefix);
+  } catch (error) {
+    if (shouldCloseSilently(error, recording?.startedAt)) return;
+    throw error;
+  }
+}
+
+async function submitTranscript(
+  pi: ExtensionAPI,
+  ctx: VoiceContext,
+  transcript: string,
+  disposition: TranscriptDisposition = "send",
+  editorPrefix?: string,
+): Promise<void> {
+  if (disposition === "editor") {
+    setEditorDraft(ctx, editorPrefix ?? ctx.ui.getEditorText(), transcript);
+    ctx.ui.notify("Voice transcript inserted into the prompt editor.", "info");
+    return;
+  }
+
+  if (editorPrefix !== undefined) ctx.ui.setEditorText(editorPrefix);
+  ctx.ui.notify(`Voice transcript: ${transcript}`, "info");
+
+  if (ctx.isIdle()) {
+    pi.sendUserMessage(transcript);
+  } else {
+    pi.sendUserMessage(transcript, { deliverAs: "followUp" });
+    ctx.ui.notify("Agent is busy; queued voice transcript as follow-up.", "info");
+  }
+}
+
+async function waitForStop(
+  ctx: VoiceContext,
+  getTranscript: () => string,
+  onRenderReady: (requestRender: () => void) => void,
+): Promise<void> {
+  if (activeRecording?.stopRequested) return;
+
+  await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+    const finish = (disposition: TranscriptDisposition = "send") => {
+      if (activeRecording) {
+        activeRecording.stopRequested = true;
+        activeRecording.disposition = disposition;
+      }
+      clearInterval(renderTimer);
       done();
       return true;
     };
 
-    activeRecording!.endUi = () => done();
+    activeRecording!.endUi = finish;
+    const renderTimer = setInterval(() => tui.requestRender(), 1000);
+    onRenderReady(() => tui.requestRender());
 
     return {
-      render: () => lines,
+      render: (width: number) => {
+        const safeWidth = Math.max(1, width);
+        return [truncateToWidth(theme.fg("muted", `${SHORTCUT} insert into editor • Enter/Escape send`), safeWidth)];
+      },
       invalidate: () => {},
+      dispose: () => clearInterval(renderTimer),
       handleInput: (key: string) => {
-        if (matchesKey(key, Key.enter) || matchesKey(key, Key.escape) || matchesKey(key, SHORTCUT)) {
-          return finish();
+        if (matchesKey(key, SHORTCUT)) {
+          return finish("editor");
+        }
+        if (matchesKey(key, Key.enter) || matchesKey(key, Key.escape)) {
+          return finish("send");
         }
         tui.requestRender();
         return true;
       },
     };
-  });
+  }, { overlay: true, overlayOptions: { anchor: "bottom-center", width: "100%" } });
+}
+
+type WidgetState = "connecting" | "recording" | "finalizing" | "fallback-recording" | "fallback-transcribing";
+
+function setVoiceWidget(ctx: VoiceContext, state: WidgetState, transcript: string): void {
+  ctx.ui.setWidget(WIDGET_KEY, () => ({
+    render: (width: number) => widgetLines(state, transcript, width),
+    invalidate: () => {},
+  }));
+}
+
+function widgetLines(state: WidgetState, transcript: string, width: number): string[] {
+  const safeWidth = Math.max(1, width);
+  const elapsed = activeRecording?.startedAt ? ` (${formatElapsed(activeRecording.startedAt)})` : "";
+  const header = (() => {
+    switch (state) {
+      case "connecting": return "🎙 Connecting to Deepgram live transcription...";
+      case "recording": return `🎙 Voice input active${elapsed}`;
+      case "finalizing": return `🎙 Finalizing Deepgram transcript${elapsed}...`;
+      case "fallback-recording": return `🎙 Prerecorded fallback recording active${elapsed}`;
+      case "fallback-transcribing": return "🎙 Recording stopped";
+    }
+  })();
+
+  const body = (() => {
+    switch (state) {
+      case "connecting": return "";
+      case "fallback-transcribing": return "Transcribing with Deepgram fallback...";
+      case "recording":
+      case "finalizing": return "";
+      case "fallback-recording": return `Press Enter, Escape, or ${SHORTCUT} to stop and transcribe.`;
+    }
+  })();
+
+  return [
+    truncateToWidth(header, safeWidth),
+    ...wrapTextWithAnsi(body, safeWidth).filter(Boolean).map((line) => truncateToWidth(line, safeWidth)),
+  ];
+}
+
+function setEditorDraft(ctx: VoiceContext, editorPrefix: string, transcript: string): void {
+  const cleanedTranscript = transcript.trim();
+  if (!cleanedTranscript) {
+    ctx.ui.setEditorText(editorPrefix);
+    return;
+  }
+  ctx.ui.setEditorText(editorPrefix.trim() ? `${editorPrefix}\n${cleanedTranscript}` : cleanedTranscript);
+}
+
+function shouldCloseSilently(error: unknown, startedAt?: number): boolean {
+  const message = formatError(error).toLowerCase();
+  const elapsedMs = startedAt ? Date.now() - startedAt : undefined;
+  const isVeryShortRecording = elapsedMs === undefined || elapsedMs < 2000;
+  return (
+    message.includes("empty live transcript") ||
+    message.includes("empty transcript") ||
+    message.includes("audio file is empty or too short") ||
+    (isVeryShortRecording && message.includes("corrupt or unsupported data"))
+  );
+}
+
+function formatElapsed(startedAt?: number): string {
+  if (!startedAt) return "00:00";
+  const totalSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+}
+
+async function abortActiveRecording(): Promise<void> {
+  const recordingToAbort = activeRecording;
+  activeRecording = undefined;
+  try {
+    await recordingToAbort?.session.abort();
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

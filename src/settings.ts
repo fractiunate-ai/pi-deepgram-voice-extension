@@ -58,6 +58,8 @@ async function listPulseSources(): Promise<AudioInputDevice[]> {
   const result = await execFileSafe("pactl", ["list", "short", "sources"]);
   if (!result.ok) return [];
 
+  const descriptions = await getPulseSourceDescriptions();
+
   return result.stdout
     .split("\n")
     .map((line) => line.trim())
@@ -66,9 +68,29 @@ async function listPulseSources(): Promise<AudioInputDevice[]> {
       const fields = line.split(/\s+/);
       const id = fields[1];
       if (!id || id.includes(".monitor")) return undefined;
-      return { kind: "pulse", id, label: id };
+      return { kind: "pulse", id, label: descriptions.get(id) ?? id };
     })
     .filter((device): device is AudioInputDevice => device !== undefined);
+}
+
+async function getPulseSourceDescriptions(): Promise<Map<string, string>> {
+  const result = await execFileSafe("pactl", ["list", "sources"]);
+  const descriptions = new Map<string, string>();
+  if (!result.ok) return descriptions;
+
+  let currentName: string | undefined;
+  for (const rawLine of result.stdout.split("\n")) {
+    const line = rawLine.trim();
+    if (line.startsWith("Name:")) {
+      currentName = line.slice("Name:".length).trim();
+      continue;
+    }
+    if (currentName && line.startsWith("Description:")) {
+      descriptions.set(currentName, line.slice("Description:".length).trim());
+      currentName = undefined;
+    }
+  }
+  return descriptions;
 }
 
 async function listAlsaDevices(): Promise<AudioInputDevice[]> {
