@@ -93,29 +93,17 @@ export default function (pi: ExtensionAPI) {
           requestUiRender = render;
         });
 
-        ctx.ui.setStatus(STATUS_KEY, "🎙 finalizing");
-        setVoiceWidget(ctx, "finalizing", liveTranscript);
-
         const audioPath = await session.stop();
         const recording = activeRecording;
         const disposition = recording?.disposition ?? "send";
         activeRecording = undefined;
+        if (disposition === "editor" && recording) setEditorDraft(ctx, recording.editorPrefix, liveTranscript);
 
-        let transcript: string;
-        try {
-          transcript = await live.finalize();
-        } catch (error) {
-          if (shouldCloseSilently(error, recording?.startedAt)) return;
-          ctx.ui.notify(`Live transcription failed; falling back to prerecorded transcription. ${formatError(error)}`, "warning");
-          try {
-            transcript = await transcribeFile(audioPath, { rawLinear16: true });
-          } catch (fallbackError) {
-            if (shouldCloseSilently(fallbackError, recording?.startedAt)) return;
-            throw fallbackError;
-          }
-        }
-
-        await submitTranscript(pi, ctx, transcript, disposition, recording?.editorPrefix);
+        const backgroundLive = live;
+        const backgroundTemp = temp!;
+        live = undefined;
+        temp = undefined;
+        finalizeLiveInBackground(pi, ctx, backgroundLive, audioPath, recording, disposition, backgroundTemp, liveTranscript);
       } catch (error) {
         if (shouldCloseSilently(error, activeRecording?.startedAt)) {
           live?.close();
@@ -127,6 +115,7 @@ export default function (pi: ExtensionAPI) {
         await abortActiveRecording();
 
         ctx.ui.notify(`Live recording failed; falling back to prerecorded recording. ${formatError(error)}`, "warning");
+        if (!temp) throw error;
         await runPrerecordedFallback(pi, ctx, temp.path);
       }
     } catch (error) {
@@ -273,6 +262,50 @@ async function promptVoiceSetting(ctx: VoiceContext, label: string, current: str
   }
 
   return choice.replace(/^current — /, "").trim();
+}
+
+function finalizeLiveInBackground(
+  pi: ExtensionAPI,
+  ctx: VoiceContext,
+  live: LiveTranscriptionSession,
+  audioPath: string,
+  recording: ActiveRecording | undefined,
+  disposition: TranscriptDisposition,
+  temp: Awaited<ReturnType<typeof createTempAudioFile>>,
+  lastLiveTranscript: string,
+): void {
+  setTimeout(() => {
+    void (async () => {
+      ctx.ui.setStatus(STATUS_KEY, "🎙 finalizing");
+      setVoiceWidget(ctx, "finalizing", lastLiveTranscript);
+
+      try {
+        let transcript: string;
+        try {
+          transcript = await live.finalize();
+        } catch (error) {
+          if (shouldCloseSilently(error, recording?.startedAt)) return;
+          ctx.ui.notify(`Live transcription failed; falling back to prerecorded transcription. ${formatError(error)}`, "warning");
+          try {
+            transcript = await transcribeFile(audioPath, { rawLinear16: true });
+          } catch (fallbackError) {
+            if (shouldCloseSilently(fallbackError, recording?.startedAt)) return;
+            throw fallbackError;
+          }
+        }
+
+        await submitTranscript(pi, ctx, transcript, disposition, recording?.editorPrefix);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.ui.notify(message, "error");
+      } finally {
+        live.close();
+        ctx.ui.setStatus(STATUS_KEY, undefined);
+        ctx.ui.setWidget(WIDGET_KEY, undefined);
+        await temp.cleanup();
+      }
+    })();
+  }, 0);
 }
 
 async function runPrerecordedFallback(pi: ExtensionAPI, ctx: VoiceContext, audioPath: string): Promise<void> {
