@@ -1,0 +1,26 @@
+{
+  "name": "pi-deepgram-voice-extension",
+  "version": "0.1.0",
+  "description": "Native Pi TUI extension for Deepgram prerecorded push-to-talk voice input.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fractiunate-ai/pi-deepgram-voice-extension.git"
+  },
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@deepgram/sdk": "^5.4.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.79.1",
+    "@earendil-works/pi-tui": "^0.79.1",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}
