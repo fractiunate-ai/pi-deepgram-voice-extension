@@ -6,7 +6,7 @@ import { createTempAudioFile } from "./temp.js";
 
 const STATUS_KEY = "deepgram-voice";
 const WIDGET_KEY = "deepgram-voice";
-const SHORTCUT = "ctrl+alt+j";
+const SHORTCUT = "alt+j";
 
 type VoiceContext = ExtensionCommandContext;
 
